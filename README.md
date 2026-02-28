@@ -1,15 +1,40 @@
-# ICC-LAB Teams File Widget
+# ICC-LAB Files + Sync Widget
 
-React + TypeScript + Vite widget for browsing Microsoft Teams channel files inside Element via Microsoft Graph API.
+React + TypeScript + Vite widget for:
 
-## What It Does
+- Browsing Microsoft Teams channel files via Microsoft Graph API.
+- Syncing Teams channel messages into Element (Matrix) rooms.
 
-- Accepts a manually pasted Microsoft Graph bearer token (stored in `sessionStorage`)
-- Validates token via `GET /me`
-- Loads joined teams and channels
-- Browses channel files/folders directly from SharePoint via Graph (no sync/copy)
-- Supports list and grid views, breadcrumbs, sorting, search, context actions, and details panel
-- Handles token expiry globally (401 clears token and prompts re-entry)
+The app runs standalone in a browser and embedded in Element as an iframe widget.
+
+## Features
+
+### Files Tab
+
+- Manual Graph bearer token entry and `/me` validation.
+- Teams and channels browsing.
+- Channel files/folders from SharePoint/Graph.
+- List and grid views, breadcrumbs, sorting, search, context actions.
+- Details panel with metadata, thumbnail, and list fields fallback handling.
+
+### Sync Tab
+
+- Channel-to-room mapping (create room or use existing room).
+- Quick Setup: bulk-create rooms from team channels.
+- Optional widget auto-pin using `window.location.origin`.
+- Optional backfill when creating mappings.
+- Polling sync engine for top-level channel messages only.
+- Matrix rate-limit backoff (429 + `Retry-After` support).
+- Per-channel errors and activity log.
+- Sync engine runs only while Sync tab is active and pauses on Files tab.
+
+## Authentication Model
+
+- Graph token: required for Files and Sync message reads.
+- Matrix token: required only for Sync writes.
+- Both tokens are stored in `sessionStorage` only.
+
+Default Matrix homeserver: `https://matrix.bsdu.eu` (editable in token modal).
 
 ## Tech Stack
 
@@ -18,6 +43,7 @@ React + TypeScript + Vite widget for browsing Microsoft Teams channel files insi
 - Tailwind CSS
 - TanStack Query + Zustand
 - Radix UI primitives
+- matrix-js-sdk (installed extension point, HTTP wrappers currently used)
 - Vitest + Testing Library
 
 ## Local Development
@@ -58,6 +84,6 @@ See `.env.example`:
 
 ## Notes
 
-- Authentication uses manually pasted Graph Explorer token only.
 - No backend and no Azure app registration required.
-- Widget works standalone and in iframe embedding mode.
+- Sync behavior is session-based and client-side only; no always-on background worker.
+- Files browsing continues to work without Matrix token.

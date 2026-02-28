@@ -10,18 +10,28 @@ import { DetailsPanel } from "@/components/files/DetailsPanel";
 import { FileGrid } from "@/components/files/FileGrid";
 import { FileList } from "@/components/files/FileList";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { TabBar } from "@/components/layout/TabBar";
 import { Toolbar } from "@/components/layout/Toolbar";
+import { SyncDashboard } from "@/components/sync/SyncDashboard";
 import { useChannels } from "@/hooks/useChannels";
 import { useFiles } from "@/hooks/useFiles";
 import { useNavigation } from "@/hooks/useNavigation";
 import { useSearch } from "@/hooks/useSearch";
 import { useTeams } from "@/hooks/useTeams";
+import { useSyncStore } from "@/stores/sync-store";
 import type { DriveItem } from "@/types";
 import { mapGraphError, type ErrorContext } from "@/utils/errors";
 
 export function AppShell() {
   const queryClient = useQueryClient();
-  const { user, clearToken, status } = useTokenContext();
+  const { user, clearToken, status, matrixStatus } = useTokenContext();
+
+  const activeTab = useSyncStore((state) => state.activeTab);
+  const setActiveTab = useSyncStore((state) => state.setActiveTab);
+  const syncRunning = useSyncStore((state) => state.syncRunning);
+  const mappingCount = useSyncStore((state) => state.mappings.length);
+  const pollIntervalSeconds = useSyncStore((state) => state.pollIntervalSeconds);
+
   const {
     selectedTeam,
     selectedChannel,
@@ -93,15 +103,17 @@ export function AppShell() {
     staleTime: 10 * 60 * 1000,
   });
 
+  const filesTabActive = activeTab === "files";
+
   const filesQuery = useFiles({
-    driveId,
-    folderId: currentFolderId,
+    driveId: filesTabActive ? driveId : null,
+    folderId: filesTabActive ? currentFolderId : null,
     sortBy,
     sortDirection,
   });
 
   const searchResultsQuery = useSearch({
-    driveId,
+    driveId: filesTabActive ? driveId : null,
     query: searchQuery,
     sortBy,
     sortDirection,
@@ -158,11 +170,12 @@ export function AppShell() {
 
   const activeQuery = searchActive ? searchResultsQuery : filesQuery;
   const items = activeQuery.data ?? [];
+
   const loading =
     teamsQuery.isLoading ||
     channelsQuery.isLoading ||
     filesFolderQuery.isLoading ||
-    activeQuery.isLoading;
+    (filesTabActive && activeQuery.isLoading);
 
   let errorContext: ErrorContext | null = null;
   let activeError: unknown = null;
@@ -176,7 +189,7 @@ export function AppShell() {
   } else if (filesFolderQuery.error) {
     activeError = filesFolderQuery.error;
     errorContext = "filesFolder";
-  } else if (activeQuery.error) {
+  } else if (filesTabActive && activeQuery.error) {
     activeError = activeQuery.error;
     errorContext = searchActive ? "search" : "files";
   }
@@ -279,6 +292,7 @@ export function AppShell() {
 
       <main className="relative flex min-w-0 flex-1 flex-col bg-app-content">
         <Toolbar
+          activeTab={activeTab}
           pathStack={toolbarPath}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -291,87 +305,101 @@ export function AppShell() {
           onNavigateToPath={navigateToPath}
           onRefresh={handleRefresh}
           tokenStatus={status}
+          matrixStatus={matrixStatus}
           onTokenClick={() => setShowTokenModal(true)}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
           searchActive={searchActive}
+          syncRunning={syncRunning}
+          mappingCount={mappingCount}
+          pollIntervalSeconds={pollIntervalSeconds}
         />
 
-        <section className="flex-1 overflow-auto p-4">
-          {copyNotice ? (
-            <div className="mb-3 rounded border border-border-default bg-app-surface px-3 py-2 text-xs text-text-secondary">
-              {copyNotice}
-            </div>
-          ) : null}
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
-          {loading ? <Skeleton rows={8} /> : null}
+        {activeTab === "files" ? (
+          <section className="flex-1 overflow-auto p-4">
+            {copyNotice ? (
+              <div className="mb-3 rounded border border-border-default bg-app-surface px-3 py-2 text-xs text-text-secondary">
+                {copyNotice}
+              </div>
+            ) : null}
 
-          {!loading && uiError ? (
-            <EmptyState
-              title={uiError.title}
-              description={uiError.description}
-              actionLabel="Retry"
-              onAction={handleRefresh}
-            />
-          ) : null}
+            {loading ? <Skeleton rows={8} /> : null}
 
-          {!loading && !uiError && teamsQuery.data?.length === 0 ? (
-            <EmptyState
-              title="No Teams found"
-              description="This account is not currently joined to any Teams visible via Graph API."
-            />
-          ) : null}
-
-          {!loading && !uiError && teamsQuery.data?.length !== 0 && items.length === 0 ? (
-            <EmptyState
-              title={searchActive ? "No matching files" : "No files yet"}
-              description={
-                searchActive
-                  ? "No files matched your search query in this channel drive."
-                  : "This channel does not have any files yet."
-              }
-              actionLabel={searchActive ? "Back to folder view" : undefined}
-              onAction={searchActive ? clearSearch : undefined}
-            />
-          ) : null}
-
-          {!loading && !uiError && items.length > 0 ? (
-            viewMode === "list" ? (
-              <FileList
-                items={items}
-                selectedItemId={selectedItem?.id ?? null}
-                onSelectItem={handleSelectItem}
-                onOpenFolder={handleOpenFolder}
-                onDownload={downloadFile}
-                onOpenInBrowser={openInBrowser}
-                onCopyLink={(item) => {
-                  void copyLink(item);
-                }}
-                onDetails={handleDetails}
+            {!loading && uiError ? (
+              <EmptyState
+                title={uiError.title}
+                description={uiError.description}
+                actionLabel="Retry"
+                onAction={handleRefresh}
               />
-            ) : (
-              <FileGrid
-                items={items}
-                selectedItemId={selectedItem?.id ?? null}
-                onSelectItem={handleSelectItem}
-                onOpenFolder={handleOpenFolder}
-                onDownload={downloadFile}
-                onOpenInBrowser={openInBrowser}
-                onCopyLink={(item) => {
-                  void copyLink(item);
-                }}
-                onDetails={handleDetails}
-              />
-            )
-          ) : null}
-        </section>
+            ) : null}
 
-        <DetailsPanel
-          open={detailsOpen}
-          item={selectedItem}
-          driveId={driveId}
-          onOpenChange={setDetailsOpen}
-        />
+            {!loading && !uiError && teamsQuery.data?.length === 0 ? (
+              <EmptyState
+                title="No Teams found"
+                description="This account is not currently joined to any Teams visible via Graph API."
+              />
+            ) : null}
+
+            {!loading && !uiError && teamsQuery.data?.length !== 0 && items.length === 0 ? (
+              <EmptyState
+                title={searchActive ? "No matching files" : "No files yet"}
+                description={
+                  searchActive
+                    ? "No files matched your search query in this channel drive."
+                    : "This channel does not have any files yet."
+                }
+                actionLabel={searchActive ? "Back to folder view" : undefined}
+                onAction={searchActive ? clearSearch : undefined}
+              />
+            ) : null}
+
+            {!loading && !uiError && items.length > 0 ? (
+              viewMode === "list" ? (
+                <FileList
+                  items={items}
+                  selectedItemId={selectedItem?.id ?? null}
+                  onSelectItem={handleSelectItem}
+                  onOpenFolder={handleOpenFolder}
+                  onDownload={downloadFile}
+                  onOpenInBrowser={openInBrowser}
+                  onCopyLink={(item) => {
+                    void copyLink(item);
+                  }}
+                  onDetails={handleDetails}
+                />
+              ) : (
+                <FileGrid
+                  items={items}
+                  selectedItemId={selectedItem?.id ?? null}
+                  onSelectItem={handleSelectItem}
+                  onOpenFolder={handleOpenFolder}
+                  onDownload={downloadFile}
+                  onOpenInBrowser={openInBrowser}
+                  onCopyLink={(item) => {
+                    void copyLink(item);
+                  }}
+                  onDetails={handleDetails}
+                />
+              )
+            ) : null}
+          </section>
+        ) : (
+          <div className="flex-1 overflow-auto">
+            <SyncDashboard />
+          </div>
+        )}
+
+        {activeTab === "files" ? (
+          <DetailsPanel
+            open={detailsOpen}
+            item={selectedItem}
+            driveId={driveId}
+            onOpenChange={setDetailsOpen}
+          />
+        ) : null}
 
         {showTokenModal ? (
           <TokenEntryScreen
@@ -386,4 +414,3 @@ export function AppShell() {
     </div>
   );
 }
-

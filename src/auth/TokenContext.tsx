@@ -7,9 +7,20 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
+import { validateMatrixToken } from "@/api/matrix-client";
 import { validateToken } from "@/api/teams";
-import { tokenManager, type TokenClearReason } from "@/auth/token-manager";
-import type { GraphUser, TokenState, TokenStatus } from "@/types";
+import { normalizeAccessToken } from "@/auth/token-format";
+import {
+  matrixTokenManager,
+  tokenManager,
+  type TokenClearReason,
+} from "@/auth/token-manager";
+import type {
+  GraphUser,
+  MatrixTokenStatus,
+  TokenState,
+  TokenStatus,
+} from "@/types";
 
 interface TokenContextValue extends TokenState {
   initializing: boolean;
@@ -19,7 +30,7 @@ interface TokenContextValue extends TokenState {
 
 const TokenContext = createContext<TokenContextValue | null>(null);
 
-function getCurrentStatus(token: string | null): TokenStatus {
+function getGraphStatus(token: string | null): TokenStatus {
   if (!token) {
     return "none";
   }
@@ -27,14 +38,28 @@ function getCurrentStatus(token: string | null): TokenStatus {
   return tokenManager.isLikelyExpired() ? "expiring" : "valid";
 }
 
+function getMatrixStatus(token: string | null): MatrixTokenStatus {
+  return token ? "valid" : "none";
+}
+
 export function TokenProvider({ children }: PropsWithChildren) {
   const [token, setTokenValue] = useState<string | null>(() => tokenManager.getToken());
   const [user, setUser] = useState<GraphUser | null>(null);
-  const [status, setStatus] = useState<TokenStatus>(() => getCurrentStatus(tokenManager.getToken()));
+  const [status, setStatus] = useState<TokenStatus>(() => getGraphStatus(tokenManager.getToken()));
+
+  const [matrixToken, setMatrixTokenValue] = useState<string | null>(() => matrixTokenManager.getToken());
+  const [matrixUserId, setMatrixUserId] = useState<string | null>(null);
+  const [matrixStatus, setMatrixStatus] = useState<MatrixTokenStatus>(() =>
+    getMatrixStatus(matrixTokenManager.getToken()),
+  );
+  const [matrixHomeserver, setMatrixHomeserver] = useState<string>(() =>
+    matrixTokenManager.getHomeserver(),
+  );
+
   const [initializing, setInitializing] = useState(true);
   const [wasAuthenticated, setWasAuthenticated] = useState(false);
 
-  const applyClearReason = useCallback((reason: TokenClearReason) => {
+  const applyGraphClearReason = useCallback((reason: TokenClearReason) => {
     setTokenValue(null);
 
     if (reason === "expired") {
@@ -47,29 +72,62 @@ export function TokenProvider({ children }: PropsWithChildren) {
     setWasAuthenticated(false);
   }, []);
 
+  const clearMatrixToken = useCallback(() => {
+    matrixTokenManager.clearToken();
+    setMatrixTokenValue(null);
+    setMatrixUserId(null);
+    setMatrixStatus("none");
+  }, []);
+
+  const setMatrixToken = useCallback(
+    async (nextToken: string, homeserver?: string): Promise<boolean> => {
+      const normalizedToken = normalizeAccessToken(nextToken);
+      if (!normalizedToken) {
+        return false;
+      }
+
+      const normalizedHomeserver = (homeserver ?? matrixHomeserver).trim() || matrixHomeserver;
+      const validation = await validateMatrixToken(normalizedHomeserver, normalizedToken);
+      if (!validation.valid || !validation.userId) {
+        return false;
+      }
+
+      matrixTokenManager.setHomeserver(normalizedHomeserver);
+      matrixTokenManager.setToken(normalizedToken);
+
+      setMatrixHomeserver(normalizedHomeserver);
+      setMatrixTokenValue(normalizedToken);
+      setMatrixUserId(validation.userId);
+      setMatrixStatus("valid");
+      return true;
+    },
+    [matrixHomeserver],
+  );
+
   const setToken = useCallback(async (nextToken: string): Promise<boolean> => {
-    const trimmed = nextToken.trim();
-    if (!trimmed) {
+    const normalizedToken = normalizeAccessToken(nextToken);
+    if (!normalizedToken) {
       return false;
     }
 
-    const result = await validateToken(trimmed);
+    const result = await validateToken(normalizedToken);
     if (!result.valid || !result.user) {
       return false;
     }
 
-    tokenManager.setToken(trimmed);
-    setTokenValue(trimmed);
+    tokenManager.setToken(normalizedToken);
+    setTokenValue(normalizedToken);
     setUser(result.user);
-    setStatus(getCurrentStatus(trimmed));
+    setStatus(getGraphStatus(normalizedToken));
     setWasAuthenticated(true);
     return true;
   }, []);
 
   const clearToken = useCallback(() => {
     tokenManager.clearToken("manual");
-    applyClearReason("manual");
-  }, [applyClearReason]);
+    applyGraphClearReason("manual");
+    clearMatrixToken();
+  }, [applyGraphClearReason, clearMatrixToken]);
 
   const revalidateToken = useCallback(async () => {
     const activeToken = tokenManager.getToken();
@@ -86,14 +144,14 @@ export function TokenProvider({ children }: PropsWithChildren) {
     if (result.valid && result.user) {
       setTokenValue(activeToken);
       setUser(result.user);
-      setStatus(getCurrentStatus(activeToken));
+      setStatus(getGraphStatus(activeToken));
       setWasAuthenticated(true);
       return;
     }
 
     tokenManager.clearToken("expired");
-    applyClearReason("expired");
-  }, [applyClearReason, status]);
+    applyGraphClearReason("expired");
+  }, [applyGraphClearReason, status]);
 
   const clearExpiredState = useCallback(() => {
     if (status === "expired") {
@@ -105,58 +163,106 @@ export function TokenProvider({ children }: PropsWithChildren) {
     let mounted = true;
 
     async function boot(): Promise<void> {
-      const activeToken = tokenManager.getToken();
-      if (!activeToken) {
-        if (mounted) {
-          setInitializing(false);
-          setStatus("none");
+      const storedGraphToken = tokenManager.getToken();
+      const activeGraphToken = storedGraphToken ? normalizeAccessToken(storedGraphToken) : null;
+      const storedMatrixToken = matrixTokenManager.getToken();
+      const activeMatrixToken = storedMatrixToken ? normalizeAccessToken(storedMatrixToken) : null;
+      const homeserver = matrixTokenManager.getHomeserver();
+
+      setMatrixHomeserver(homeserver);
+
+      if (activeGraphToken && storedGraphToken !== activeGraphToken) {
+        tokenManager.setToken(activeGraphToken);
+      }
+      if (activeMatrixToken && storedMatrixToken !== activeMatrixToken) {
+        matrixTokenManager.setToken(activeMatrixToken);
+      }
+
+      if (activeGraphToken) {
+        const graphResult = await validateToken(activeGraphToken);
+
+        if (!mounted) {
+          return;
         }
-        return;
-      }
 
-      const result = await validateToken(activeToken);
-      if (!mounted) {
-        return;
-      }
-
-      if (result.valid && result.user) {
-        setTokenValue(activeToken);
-        setUser(result.user);
-        setStatus(getCurrentStatus(activeToken));
-        setWasAuthenticated(true);
+        if (graphResult.valid && graphResult.user) {
+          setTokenValue(activeGraphToken);
+          setUser(graphResult.user);
+          setStatus(getGraphStatus(activeGraphToken));
+          setWasAuthenticated(true);
+        } else {
+          tokenManager.clearToken("expired");
+          applyGraphClearReason("expired");
+        }
       } else {
-        tokenManager.clearToken("expired");
-        applyClearReason("expired");
+        setStatus("none");
       }
 
-      setInitializing(false);
+      if (activeMatrixToken) {
+        const matrixResult = await validateMatrixToken(homeserver, activeMatrixToken);
+
+        if (!mounted) {
+          return;
+        }
+
+        if (matrixResult.valid && matrixResult.userId) {
+          setMatrixTokenValue(activeMatrixToken);
+          setMatrixUserId(matrixResult.userId);
+          setMatrixStatus("valid");
+        } else {
+          clearMatrixToken();
+        }
+      } else {
+        setMatrixStatus("none");
+      }
+
+      if (mounted) {
+        setInitializing(false);
+      }
     }
 
-    boot();
+    void boot();
 
     return () => {
       mounted = false;
     };
-  }, [applyClearReason]);
+  }, [applyGraphClearReason, clearMatrixToken]);
 
   useEffect(() => {
     const unsubscribe = tokenManager.subscribe((event) => {
       if (event.type === "set") {
         setTokenValue(event.token);
-        setStatus(getCurrentStatus(event.token));
+        setStatus(getGraphStatus(event.token));
         return;
       }
 
-      applyClearReason(event.reason);
+      applyGraphClearReason(event.reason);
     });
 
     return unsubscribe;
-  }, [applyClearReason]);
+  }, [applyGraphClearReason]);
+
+  useEffect(() => {
+    const unsubscribe = matrixTokenManager.subscribe((event) => {
+      if (event.type === "set") {
+        setMatrixTokenValue(event.token);
+        setMatrixStatus("valid");
+        return;
+      }
+
+      setMatrixTokenValue(null);
+      setMatrixUserId(null);
+      setMatrixStatus("none");
+    });
+
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      if (tokenManager.getToken()) {
-        setStatus(getCurrentStatus(tokenManager.getToken()));
+      const activeToken = tokenManager.getToken();
+      if (activeToken) {
+        setStatus(getGraphStatus(activeToken));
       }
     }, 60 * 1000);
 
@@ -170,18 +276,30 @@ export function TokenProvider({ children }: PropsWithChildren) {
       token,
       user,
       status,
+      matrixToken,
+      matrixUserId,
+      matrixStatus,
+      matrixHomeserver,
       setToken,
       clearToken,
       revalidateToken,
+      setMatrixToken,
+      clearMatrixToken,
       initializing,
       wasAuthenticated,
       clearExpiredState,
     }),
     [
       clearExpiredState,
+      clearMatrixToken,
       clearToken,
       initializing,
+      matrixHomeserver,
+      matrixStatus,
+      matrixToken,
+      matrixUserId,
       revalidateToken,
+      setMatrixToken,
       setToken,
       status,
       token,
@@ -201,4 +319,3 @@ export function useTokenContext(): TokenContextValue {
 
   return context;
 }
-

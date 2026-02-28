@@ -11,11 +11,13 @@ export interface Team {
   description?: string;
 }
 
+export type ChannelSource = "teams-channel" | "drive-folder";
+
 export interface Channel {
   id: string;
   displayName: string;
   description?: string;
-  source?: "teams-channel" | "drive-folder";
+  source?: ChannelSource;
   folderId?: string;
   driveId?: string;
 }
@@ -85,17 +87,99 @@ export interface NavigationState {
 }
 
 export type TokenStatus = "valid" | "expiring" | "expired" | "none";
+export type MatrixTokenStatus = "valid" | "none";
 
 export interface TokenState {
   token: string | null;
   user: GraphUser | null;
   status: TokenStatus;
+
+  matrixToken: string | null;
+  matrixUserId: string | null;
+  matrixStatus: MatrixTokenStatus;
+  matrixHomeserver: string;
+
   setToken: (token: string) => Promise<boolean>;
   clearToken: () => void;
   revalidateToken: () => Promise<void>;
+
+  setMatrixToken: (token: string, homeserver?: string) => Promise<boolean>;
+  clearMatrixToken: () => void;
 }
 
 export interface GraphListItemFields {
   [key: string]: unknown;
 }
 
+export interface TeamsMessage {
+  id: string;
+  createdDateTime: string;
+  lastModifiedDateTime: string;
+  messageType: "message" | "systemEventMessage";
+  body: {
+    contentType: "text" | "html";
+    content: string;
+  };
+  from?: {
+    user?: {
+      id: string;
+      displayName: string;
+    };
+    application?: {
+      displayName: string;
+    };
+  };
+  attachments?: Array<{
+    id: string;
+    contentType: string;
+    contentUrl?: string;
+    name?: string;
+  }>;
+  reactions?: Array<{
+    reactionType: string;
+    user: {
+      user: {
+        id: string;
+        displayName: string;
+      };
+    };
+  }>;
+}
+
+export interface TeamsMessagesResponse {
+  value: TeamsMessage[];
+  "@odata.nextLink"?: string;
+  "@odata.deltaLink"?: string;
+}
+
+export interface MatrixRoom {
+  room_id: string;
+  name?: string;
+}
+
+export interface MatrixJoinedRoomsResponse {
+  joined_rooms: string[];
+}
+
+export interface ChannelMapping {
+  teamId: string;
+  teamName: string;
+  channelId: string;
+  channelName: string;
+  matrixRoomId: string;
+  lastSyncedMessageId: string | null;
+  lastSyncedAt: string | null;
+  enabled: boolean;
+}
+
+export type SyncTab = "files" | "sync";
+
+export interface SyncLogEntry {
+  timestamp: string;
+  channelName: string;
+  messageCount: number;
+  status: "success" | "error";
+  error?: string;
+}
+
+export type SyncStatus = "idle" | "running" | "paused" | "error";

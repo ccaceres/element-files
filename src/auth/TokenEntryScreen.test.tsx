@@ -3,11 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenEntryScreen } from "@/auth/TokenEntryScreen";
 
 const setTokenMock = vi.fn();
+const setMatrixTokenMock = vi.fn();
 const clearExpiredStateMock = vi.fn();
 
 vi.mock("@/auth/TokenContext", () => ({
   useTokenContext: () => ({
     setToken: setTokenMock,
+    setMatrixToken: setMatrixTokenMock,
+    matrixHomeserver: "https://matrix.bsdu.eu",
     status: "none",
     clearExpiredState: clearExpiredStateMock,
   }),
@@ -16,7 +19,9 @@ vi.mock("@/auth/TokenContext", () => ({
 describe("TokenEntryScreen", () => {
   beforeEach(() => {
     setTokenMock.mockReset();
+    setMatrixTokenMock.mockReset();
     clearExpiredStateMock.mockReset();
+    setMatrixTokenMock.mockResolvedValue(true);
   });
 
   it("submits token and calls onSuccess when valid", async () => {
@@ -25,7 +30,7 @@ describe("TokenEntryScreen", () => {
 
     render(<TokenEntryScreen onSuccess={onSuccess} />);
 
-    fireEvent.change(screen.getByLabelText("Bearer Token"), {
+    fireEvent.change(screen.getByLabelText("Microsoft 365 Token (required)"), {
       target: { value: "token-value" },
     });
 
@@ -43,14 +48,14 @@ describe("TokenEntryScreen", () => {
 
     render(<TokenEntryScreen />);
 
-    fireEvent.change(screen.getByLabelText("Bearer Token"), {
+    fireEvent.change(screen.getByLabelText("Microsoft 365 Token (required)"), {
       target: { value: "invalid" },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(
-      await screen.findByText(/Invalid token\. Please copy a fresh access token/i),
+      await screen.findByText(/Microsoft token validation failed/i),
     ).toBeInTheDocument();
     expect(setTokenMock).toHaveBeenCalledWith("invalid");
   });

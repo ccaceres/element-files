@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useTokenContext } from "@/auth/TokenContext";
 import { KeyRegular } from "@fluentui/react-icons";
 import clsx from "clsx";
@@ -16,28 +16,54 @@ export function TokenEntryScreen({
   onCancel,
   forceExpired = false,
 }: TokenEntryScreenProps) {
-  const { setToken, status, clearExpiredState } = useTokenContext();
-  const [token, setTokenValue] = useState("");
+  const { setToken, setMatrixToken, status, clearExpiredState, matrixHomeserver } =
+    useTokenContext();
+
+  const [graphToken, setGraphToken] = useState("");
+  const [matrixToken, setMatrixTokenValue] = useState("");
+  const [homeserver, setHomeserver] = useState(matrixHomeserver);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [matrixWarning, setMatrixWarning] = useState<string | null>(null);
 
   const isOverlay = mode === "overlay";
   const showExpiredCopy = forceExpired || status === "expired";
+
+  const canSubmit = useMemo(
+    () => graphToken.trim().length > 0 && !submitting,
+    [graphToken, submitting],
+  );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
+    setMatrixWarning(null);
 
     try {
-      const valid = await setToken(token);
-      if (!valid) {
-        setError("Invalid token. Please copy a fresh access token from Graph Explorer.");
+      const graphOk = await setToken(graphToken);
+      if (!graphOk) {
+        setError(
+          'Microsoft token validation failed. Paste only the raw access token (without "Bearer "), verify User.Read is consented in Graph Explorer, and try again.',
+        );
         return;
       }
 
+      const matrixTokenTrimmed = matrixToken.trim();
+      if (matrixTokenTrimmed) {
+        const matrixOk = await setMatrixToken(matrixTokenTrimmed, homeserver.trim());
+        if (!matrixOk) {
+          setError("Graph token is valid, but Matrix token is invalid. Check token and homeserver.");
+          return;
+        }
+      } else {
+        setMatrixWarning("Connected for Files. Add Matrix token later to enable Sync.");
+      }
+
       clearExpiredState();
-      setTokenValue("");
+      setGraphToken("");
+      setMatrixTokenValue("");
       onSuccess?.();
     } finally {
       setSubmitting(false);
@@ -53,58 +79,85 @@ export function TokenEntryScreen({
           : "flex min-h-screen items-center justify-center bg-app-bg p-4",
       )}
     >
-      <div className="w-full max-w-2xl rounded-lg border border-border-default bg-app-surface p-6 shadow-panel">
+      <div className="w-full max-w-3xl rounded-lg border border-border-default bg-app-surface p-6 shadow-panel">
         <div className="mb-5 flex items-center gap-3 text-text-primary">
           <div className="rounded-md bg-accent-light p-2 text-accent-primary">
             <KeyRegular fontSize={22} />
           </div>
           <div>
-            <h1 className="text-xl font-semibold">Connect to Microsoft 365</h1>
+            <h1 className="text-xl font-semibold">Connect to ICC-LAB Services</h1>
             <p className="text-sm text-text-secondary">
               {showExpiredCopy
-                ? "Token expired. Paste a new access token to continue browsing files."
-                : "Paste a Microsoft Graph access token to open Teams files."}
+                ? "Graph token expired. Paste a new token to continue."
+                : "Files need Microsoft token. Sync needs both Microsoft and Element tokens."}
             </p>
           </div>
         </div>
 
-        <ol className="mb-5 list-decimal space-y-2 pl-5 text-sm text-text-secondary">
-          <li>
-            Open
-            <a
-              className="ml-1 text-text-link hover:underline"
-              href="https://developer.microsoft.com/en-us/graph/graph-explorer"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Graph Explorer
-            </a>
-            .
-          </li>
-          <li>Sign in with your ICC account.</li>
-          <li>Open the Access token tab and copy the full token.</li>
-        </ol>
+        <form className="space-y-6" onSubmit={handleSubmit}>
+          <section className="space-y-2">
+            <label className="block text-sm font-medium text-text-primary" htmlFor="graph-token-input">
+              Microsoft 365 Token (required)
+            </label>
+            <textarea
+              id="graph-token-input"
+              className="h-32 w-full rounded border border-border-default bg-app-content p-3 font-mono text-xs text-text-primary outline-none transition focus:border-accent-primary"
+              placeholder="Paste Graph Explorer token..."
+              value={graphToken}
+              onChange={(event) => setGraphToken(event.target.value)}
+              disabled={submitting}
+            />
+            <p className="text-xs text-text-secondary">
+              Get it from
+              <a
+                className="ml-1 text-text-link hover:underline"
+                href="https://developer.microsoft.com/en-us/graph/graph-explorer"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Graph Explorer
+              </a>
+              .
+            </p>
+          </section>
 
-        <form className="space-y-4" onSubmit={handleSubmit}>
-          <label className="block text-sm font-medium text-text-primary" htmlFor="token-input">
-            Bearer Token
-          </label>
-          <textarea
-            id="token-input"
-            className="h-36 w-full rounded border border-border-default bg-app-content p-3 font-mono text-xs text-text-primary outline-none transition focus:border-accent-primary"
-            placeholder="Paste your bearer token here..."
-            value={token}
-            onChange={(event) => setTokenValue(event.target.value)}
-            disabled={submitting}
-          />
+          <section className="space-y-2">
+            <label className="block text-sm font-medium text-text-primary" htmlFor="matrix-token-input">
+              Element Token (required for Sync)
+            </label>
+            <textarea
+              id="matrix-token-input"
+              className="h-24 w-full rounded border border-border-default bg-app-content p-3 font-mono text-xs text-text-primary outline-none transition focus:border-accent-primary"
+              placeholder="Paste Matrix access token..."
+              value={matrixToken}
+              onChange={(event) => setMatrixTokenValue(event.target.value)}
+              disabled={submitting}
+            />
+
+            <label className="block text-xs font-medium text-text-secondary" htmlFor="matrix-homeserver-input">
+              Matrix Homeserver
+            </label>
+            <input
+              id="matrix-homeserver-input"
+              className="w-full rounded border border-border-default bg-app-content px-3 py-2 text-xs text-text-primary outline-none transition focus:border-accent-primary"
+              value={homeserver}
+              onChange={(event) => setHomeserver(event.target.value)}
+              placeholder="https://matrix.bsdu.eu"
+              disabled={submitting}
+            />
+            <p className="text-xs text-text-secondary">
+              Get token from Element: Settings - Help & About - Access Token.
+            </p>
+          </section>
 
           {error ? <p className="text-sm text-token-expired">{error}</p> : null}
+          {matrixWarning ? <p className="text-sm text-token-warning">{matrixWarning}</p> : null}
 
           <div className="flex items-center gap-3">
             <button
               className="rounded bg-accent-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-70"
               type="submit"
-              disabled={submitting || token.trim().length === 0}
+              disabled={!canSubmit}
             >
               {submitting ? "Connecting..." : "Connect"}
             </button>
@@ -121,10 +174,9 @@ export function TokenEntryScreen({
         </form>
 
         <p className="mt-5 text-xs text-text-tertiary">
-          Token is stored in your browser session only and never sent to our servers.
+          Tokens are stored in your browser session only and never sent to our servers.
         </p>
       </div>
     </div>
   );
 }
-
