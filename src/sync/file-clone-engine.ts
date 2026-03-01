@@ -151,17 +151,45 @@ class FileCloneEngine {
     this.tickInFlight = true;
 
     try {
-      const { fileCloneMappings } = useSyncStore.getState();
+      const { fileCloneMappings, fileCloneCooldownUntilByMappingId } = useSyncStore.getState();
       const activeMappings = fileCloneMappings.filter(
         (mapping) => mapping.enabled && mapping.canonical && Boolean(mapping.matrixSpaceId),
       );
 
       for (const mapping of activeMappings) {
+        const cooldownUntil = fileCloneCooldownUntilByMappingId[mapping.id];
+        if (cooldownUntil) {
+          const retryAtMs = Date.parse(cooldownUntil);
+          if (!Number.isNaN(retryAtMs) && retryAtMs > Date.now()) {
+            const seconds = Math.max(1, Math.ceil((retryAtMs - Date.now()) / 1000));
+            useSyncStore
+              .getState()
+              .setFileCloneError(mapping.id, `Rate limited, retrying in ${seconds}s.`);
+            continue;
+          }
+
+          useSyncStore.getState().setFileCloneCooldown(mapping.id, null);
+        }
+
         try {
           const stats = await this.runDeltaTick(mapping);
           useSyncStore.getState().setFileCloneError(mapping.id, null);
           this.logSuccess(mapping, "delta", stats);
         } catch (error) {
+          if (error instanceof MappingRateLimitedError) {
+            useSyncStore.getState().setFileCloneError(mapping.id, error.message);
+            useSyncStore.getState().addFileCloneLogEntry({
+              mappingId: mapping.id,
+              timestamp: new Date().toISOString(),
+              channelName: `${mapping.teamName} > ${mapping.channelLabel}`,
+              messageCount: 0,
+              status: "error",
+              action: "delta",
+              error: error.message,
+            });
+            continue;
+          }
+
           if (this.isFatalAuthError(error)) {
             this.handleFatalAuthError(error);
             return;
@@ -227,6 +255,35 @@ class FileCloneEngine {
     this.stop();
   }
 
+  private isRateLimitError(error: unknown): error is MatrixApiError | GraphApiError {
+    return (
+      (error instanceof MatrixApiError || error instanceof GraphApiError) &&
+      error.status === 429
+    );
+  }
+
+  private toRateLimitDelayMs(error: MatrixApiError | GraphApiError, attempt: number): number {
+    if (error.retryAfterMs && error.retryAfterMs > 0) {
+      return Math.min(MAX_RATE_LIMIT_DELAY_MS, error.retryAfterMs);
+    }
+
+    return computeBackoffWithJitter(attempt, 1000, MAX_RATE_LIMIT_DELAY_MS);
+  }
+
+  private setMappingCooldown(
+    mapping: FileCloneMapping,
+    error: MatrixApiError | GraphApiError,
+    attempt: number,
+  ): MappingRateLimitedError {
+    const delayMs = this.toRateLimitDelayMs(error, attempt);
+    const retryAt = new Date(Date.now() + delayMs).toISOString();
+    const seconds = Math.max(1, Math.ceil(delayMs / 1000));
+    const message = `Rate limited, retrying in ${seconds}s.`;
+
+    useSyncStore.getState().setFileCloneCooldown(mapping.id, retryAt);
+    return new MappingRateLimitedError(message, delayMs);
+  }
+
   private async uploadFileWithMetadata(
     mapping: FileCloneMapping,
     file: DriveTreeFile,
@@ -247,7 +304,7 @@ class FileCloneEngine {
         channel: mapping.channelLabel,
         driveItemId: file.id,
       });
-      await wait(SEND_DELAY_MS);
+      await sleep(SEND_DELAY_MS);
       return event.event_id;
     } catch (error) {
       if (error instanceof MatrixFileSendError) {
@@ -312,7 +369,27 @@ class FileCloneEngine {
       return stats;
     }
 
-    const tree = await listFolderTree(mapping.driveId, mapping.rootFolderId);
+    const existingCooldown = useSyncStore.getState().fileCloneCooldownUntilByMappingId[mapping.id];
+    if (existingCooldown) {
+      const retryAt = Date.parse(existingCooldown);
+      if (!Number.isNaN(retryAt) && retryAt > Date.now()) {
+        const delayMs = retryAt - Date.now();
+        const seconds = Math.max(1, Math.ceil(delayMs / 1000));
+        throw new MappingRateLimitedError(`Rate limited, retrying in ${seconds}s.`, delayMs);
+      }
+      useSyncStore.getState().setFileCloneCooldown(mapping.id, null);
+    }
+
+    let rateLimitAttempt = 0;
+    let tree: DriveTreeFile[];
+    try {
+      tree = await listFolderTree(mapping.driveId, mapping.rootFolderId);
+    } catch (error) {
+      if (this.isRateLimitError(error)) {
+        throw this.setMappingCooldown(mapping, error, rateLimitAttempt);
+      }
+      throw error;
+    }
     stats.scanned = tree.length;
 
     const previousIndex = useSyncStore.getState().fileCloneStateIndex[mapping.id] ?? {};
@@ -356,10 +433,17 @@ class FileCloneEngine {
     const deletedIds = Object.keys(previousIndex).filter((id) => !currentById.has(id));
 
     if (mode === "initial") {
-      await sendCloneNotice(
-        mapping.matrixRoomId,
-        `📁 Starting initial file clone for ${mapping.teamName} > ${mapping.channelLabel} (${tree.length} files).`,
-      );
+      try {
+        await sendCloneNotice(
+          mapping.matrixRoomId,
+          `📁 Starting initial file clone for ${mapping.teamName} > ${mapping.channelLabel} (${tree.length} files).`,
+        );
+      } catch (error) {
+        if (this.isRateLimitError(error)) {
+          throw this.setMappingCooldown(mapping, error, rateLimitAttempt);
+        }
+        throw error;
+      }
     }
 
     const uploadWork = async (
@@ -375,13 +459,6 @@ class FileCloneEngine {
       }
 
       try {
-        if (kind === "update") {
-          await sendCloneNotice(
-            mapping.matrixRoomId,
-            `♻️ Updated in Teams: ${file.path}. Uploading latest version.`,
-          );
-        }
-
         const eventId = await this.uploadFileWithMetadata(mapping, file);
         nextIndex[file.id] = {
           ...toState(file),
@@ -419,6 +496,14 @@ class FileCloneEngine {
           return;
         }
 
+        if (this.isRateLimitError(cause)) {
+          const rateLimited = this.setMappingCooldown(mapping, cause, rateLimitAttempt);
+          rateLimitAttempt += 1;
+          nextIndex[file.id] = this.toFailedState(file, previousIndex[file.id], rateLimited.message);
+          stats.skipped += 1;
+          throw rateLimited;
+        }
+
         stats.errors += 1;
         const message = this.toErrorMessage(stage, cause);
         nextIndex[file.id] = this.toFailedState(file, previousIndex[file.id], message);
@@ -438,8 +523,20 @@ class FileCloneEngine {
       }
     };
 
-    await runWithConcurrency(toUpload, CLONE_CONCURRENCY, async (file) => uploadWork(file, "upload"));
-    await runWithConcurrency(toUpdate, CLONE_CONCURRENCY, async (file) => uploadWork(file, "update"));
+    try {
+      await runWithConcurrency(toUpload, CLONE_CONCURRENCY, async (file) =>
+        uploadWork(file, "upload"),
+      );
+      await runWithConcurrency(toUpdate, CLONE_CONCURRENCY, async (file) =>
+        uploadWork(file, "update"),
+      );
+    } catch (error) {
+      useSyncStore.getState().setFileCloneMappingState(mapping.id, nextIndex);
+      if (error instanceof MappingRateLimitedError) {
+        throw error;
+      }
+      throw error;
+    }
 
     for (const driveItemId of deletedIds) {
       const stillEnabled = useSyncStore
@@ -463,6 +560,10 @@ class FileCloneEngine {
         delete nextIndex[driveItemId];
         stats.deleted += 1;
       } catch (error) {
+        if (this.isRateLimitError(error)) {
+          useSyncStore.getState().setFileCloneMappingState(mapping.id, nextIndex);
+          throw this.setMappingCooldown(mapping, error, rateLimitAttempt);
+        }
         stats.errors += 1;
         if (this.isFatalAuthError(error)) {
           throw error;
@@ -476,10 +577,19 @@ class FileCloneEngine {
     });
 
     if (mode === "initial") {
-      await sendCloneNotice(
-        mapping.matrixRoomId,
-        `✅ Initial file clone finished for ${mapping.teamName} > ${mapping.channelLabel}. Uploaded ${stats.uploaded} files.`,
-      );
+      try {
+        await sendCloneNotice(
+          mapping.matrixRoomId,
+          `✅ Initial file clone finished for ${mapping.teamName} > ${mapping.channelLabel}. Uploaded ${stats.uploaded} files.`,
+        );
+      } catch (error) {
+        if (this.isRateLimitError(error)) {
+          const delayMs = this.toRateLimitDelayMs(error, rateLimitAttempt);
+          useSyncStore
+            .getState()
+            .setFileCloneCooldown(mapping.id, new Date(Date.now() + delayMs).toISOString());
+        }
+      }
     }
 
     return stats;

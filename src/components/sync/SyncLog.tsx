@@ -91,7 +91,16 @@ export function SyncLog({ messageEntries, fileEntries, onClear }: SyncLogProps) 
                 {entry.action ? ` • ${entry.action}` : ""}
               </p>
               {entry.path ? <p className="mt-1 text-text-tertiary">{entry.path}</p> : null}
-              {entry.error ? <p className="mt-1 text-token-expired">{entry.error}</p> : null}
+              {entry.error ? (
+                <p
+                  className={clsx(
+                    "mt-1",
+                    /rate limited/i.test(entry.error) ? "text-token-warning" : "text-token-expired",
+                  )}
+                >
+                  {entry.error}
+                </p>
+              ) : null}
             </div>
           ))
         )}
