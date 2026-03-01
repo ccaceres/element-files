@@ -16,6 +16,7 @@ describe("retry utilities", () => {
   });
 
   it("parses date Retry-After as future delta", () => {
+    vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-01T00:00:00Z"));
     const ms = parseRetryAfterMs("Sun, 01 Mar 2026 00:00:05 GMT");
     expect(ms).toBe(5000);
