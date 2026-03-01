@@ -67,6 +67,7 @@ describe("fileCloneEngine", () => {
       fileCloneErrors: {},
       fileCloneLog: [],
       fileCloneStateIndex: {},
+      fileCloneCooldownUntilByMappingId: {},
     }));
   });
 
@@ -304,5 +305,50 @@ describe("fileCloneEngine", () => {
     expect(stats.skipped).toBe(0);
     const stored = useSyncStore.getState().fileCloneStateIndex[mapping.id]?.["file-err"];
     expect(stored?.lastCloneStatus).toBe("failed");
+  });
+
+  it("sets cooldown and stops processing mapping on matrix 429", async () => {
+    const mapping = makeMapping();
+    useSyncStore.getState().setFileCloneMappings([mapping]);
+
+    listFolderTreeMock.mockResolvedValue([
+      {
+        id: "file-1",
+        name: "A.docx",
+        path: "/General/A.docx",
+        size: 100,
+        lastModifiedDateTime: "2026-02-28T10:00:00Z",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        webUrl: "https://example.com/A.docx",
+      },
+      {
+        id: "file-2",
+        name: "B.pdf",
+        path: "/General/B.pdf",
+        size: 200,
+        lastModifiedDateTime: "2026-02-28T10:00:01Z",
+        mimeType: "application/pdf",
+        webUrl: "https://example.com/B.pdf",
+      },
+    ]);
+
+    sendFileMock.mockRejectedValueOnce(new MatrixApiError(429, "Too Many Requests", 1500));
+
+    await expect(fileCloneEngine.runDeltaTick(mapping)).rejects.toThrow(/Rate limited, retrying in/i);
+    expect(sendFileMock).toHaveBeenCalledTimes(1);
+    expect(useSyncStore.getState().fileCloneCooldownUntilByMappingId[mapping.id]).toBeTruthy();
+  });
+
+  it("uses graph retry-after cooldown on 429 folder listing errors", async () => {
+    const mapping = makeMapping();
+    useSyncStore.getState().setFileCloneMappings([mapping]);
+
+    listFolderTreeMock.mockRejectedValueOnce(
+      new GraphApiError(429, "Too Many Requests", "Too Many Requests", 7000),
+    );
+
+    await expect(fileCloneEngine.runDeltaTick(mapping)).rejects.toThrow(/Rate limited, retrying in/i);
+    const cooldown = useSyncStore.getState().fileCloneCooldownUntilByMappingId[mapping.id];
+    expect(cooldown).toBeTruthy();
   });
 });
