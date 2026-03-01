@@ -1,44 +1,35 @@
-import type { ChannelMapping } from "@/types";
+import clsx from "clsx";
+import type { FileCloneMapping } from "@/types";
 
-interface ChannelMappingsProps {
-  mappings: ChannelMapping[];
-  syncErrors: Record<string, string>;
-  onToggleEnabled: (mapping: ChannelMapping, enabled: boolean) => void;
-  onRemove: (mapping: ChannelMapping) => void;
-  onOpenAddDialog: () => void;
+interface FileCloneMappingsProps {
+  mappings: FileCloneMapping[];
+  errors: Record<string, string>;
+  onToggleEnabled: (mapping: FileCloneMapping, enabled: boolean) => void;
+  onRemove: (mapping: FileCloneMapping) => void;
 }
 
-export function ChannelMappings({
+export function FileCloneMappings({
   mappings,
-  syncErrors,
+  errors,
   onToggleEnabled,
   onRemove,
-  onOpenAddDialog,
-}: ChannelMappingsProps) {
+}: FileCloneMappingsProps) {
   return (
     <section className="rounded-lg border border-border-default bg-app-surface p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-text-primary">Channel Mappings</h3>
-        <button
-          type="button"
-          className="rounded bg-accent-primary px-3 py-1.5 text-xs text-white transition hover:bg-accent-hover"
-          onClick={onOpenAddDialog}
-        >
-          Add channel mapping
-        </button>
-      </div>
+      <h3 className="mb-3 text-sm font-semibold text-text-primary">File Clone Mappings</h3>
 
       {mappings.length === 0 ? (
-        <p className="text-xs text-text-secondary">No mappings configured.</p>
+        <p className="text-xs text-text-secondary">No file clone mappings configured.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-xs">
             <thead>
               <tr className="border-b border-border-default text-text-tertiary">
                 <th className="px-2 py-1">Team</th>
+                <th className="px-2 py-1">Space ID</th>
                 <th className="px-2 py-1">Channel</th>
                 <th className="px-2 py-1">Source</th>
-                <th className="px-2 py-1">Room</th>
+                <th className="px-2 py-1">Room ID</th>
                 <th className="px-2 py-1">Status</th>
                 <th className="px-2 py-1">Actions</th>
               </tr>
@@ -47,17 +38,39 @@ export function ChannelMappings({
               {mappings.map((mapping) => (
                 <tr key={mapping.id} className="border-b border-border-subtle">
                   <td className="px-2 py-2 text-text-primary">{mapping.teamName}</td>
-                  <td className="px-2 py-2 text-text-primary">{mapping.channelName}</td>
-                  <td className="px-2 py-2 text-text-secondary">{mapping.source}</td>
-                  <td className="px-2 py-2 text-text-secondary">{mapping.matrixRoomId}</td>
+                  <td className="px-2 py-2 font-mono text-text-secondary">{mapping.matrixSpaceId}</td>
+                  <td className="px-2 py-2 text-text-primary">
+                    <span>{mapping.channelLabel}</span>
+                    {mapping.canonical ? (
+                      <span className="ml-2 rounded bg-accent-light px-1.5 py-0.5 text-[10px] text-accent-primary">
+                        Canonical
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-2 py-2">
-                    {syncErrors[mapping.id] ? (
-                      <span className="text-token-expired">{syncErrors[mapping.id]}</span>
+                    <span
+                      className={clsx(
+                        "rounded px-2 py-0.5",
+                        mapping.source === "teams-channel"
+                          ? "bg-accent-light text-accent-primary"
+                          : "bg-app-content text-text-secondary",
+                      )}
+                    >
+                      {mapping.source}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2 font-mono text-text-secondary">{mapping.matrixRoomId}</td>
+                  <td className="px-2 py-2">
+                    {errors[mapping.id] ? (
+                      <span className="text-token-expired">{errors[mapping.id]}</span>
                     ) : mapping.enabled ? (
                       <span className="text-token-valid">Enabled</span>
                     ) : (
                       <span className="text-text-secondary">Paused</span>
                     )}
+                    {mapping.health && mapping.health !== "ok" ? (
+                      <span className="ml-2 text-token-warning">({mapping.health})</span>
+                    ) : null}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center gap-2">

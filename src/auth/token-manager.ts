@@ -2,7 +2,7 @@ const TOKEN_KEY = "graph_bearer_token";
 const TOKEN_TIMESTAMP_KEY = "graph_token_timestamp";
 const MATRIX_TOKEN_KEY = "matrix_access_token";
 const MATRIX_HOMESERVER_KEY = "matrix_homeserver_url";
-const MATRIX_DEFAULT_HOMESERVER = "https://matrix.bsdu.eu";
+const MATRIX_FALLBACK_HOMESERVER = "https://matrix.bsdu.eu";
 
 type TokenClearReason = "manual" | "expired";
 
@@ -39,6 +39,24 @@ function emitMatrix(event: MatrixTokenEvent): void {
   for (const listener of matrixListeners) {
     listener(event);
   }
+}
+
+function getEnvMatrixToken(): string | null {
+  const fromDefine = typeof __ELEMENT_TOKEN__ !== "undefined" ? __ELEMENT_TOKEN__ : "";
+  const fromVite = (import.meta.env.VITE_ELEMENT_TOKEN as string | undefined) ?? "";
+  const token = (fromDefine || fromVite).trim();
+  return token || null;
+}
+
+function getRawEnvMatrixHomeserver(): string {
+  const fromDefine =
+    typeof __MATRIX_SERVER_URL__ !== "undefined" ? __MATRIX_SERVER_URL__ : "";
+  const fromVite = (import.meta.env.VITE_MATRIX_SERVER_URL as string | undefined) ?? "";
+  return (fromDefine || fromVite).trim();
+}
+
+function getEnvMatrixHomeserver(): string {
+  return getRawEnvMatrixHomeserver() || MATRIX_FALLBACK_HOMESERVER;
 }
 
 export const tokenManager = {
@@ -98,11 +116,22 @@ export const tokenManager = {
 
 export const matrixTokenManager = {
   getToken: (): string | null => {
+    const envToken = getEnvMatrixToken();
+    if (envToken) {
+      return envToken;
+    }
+
     const storage = getSessionStorage();
     return storage?.getItem(MATRIX_TOKEN_KEY) ?? null;
   },
 
   setToken: (token: string): void => {
+    const envToken = getEnvMatrixToken();
+    if (envToken) {
+      emitMatrix({ type: "set", token: envToken });
+      return;
+    }
+
     const storage = getSessionStorage();
     if (!storage) {
       return;
@@ -113,22 +142,36 @@ export const matrixTokenManager = {
   },
 
   clearToken: (): void => {
+    const envToken = getEnvMatrixToken();
     const storage = getSessionStorage();
-    if (!storage) {
+    if (storage) {
+      storage.removeItem(MATRIX_TOKEN_KEY);
+    }
+
+    if (envToken) {
+      emitMatrix({ type: "set", token: envToken });
       return;
     }
 
-    storage.removeItem(MATRIX_TOKEN_KEY);
     emitMatrix({ type: "clear" });
   },
 
   getHomeserver: (): string => {
+    const configuredHomeserver = getRawEnvMatrixHomeserver();
+    if (configuredHomeserver) {
+      return configuredHomeserver;
+    }
+
     const storage = getSessionStorage();
     const stored = storage?.getItem(MATRIX_HOMESERVER_KEY);
-    return stored || MATRIX_DEFAULT_HOMESERVER;
+    return stored || MATRIX_FALLBACK_HOMESERVER;
   },
 
   setHomeserver: (url: string): void => {
+    if (getRawEnvMatrixHomeserver()) {
+      return;
+    }
+
     const storage = getSessionStorage();
     if (!storage) {
       return;
@@ -150,6 +193,8 @@ export {
   TOKEN_TIMESTAMP_KEY,
   MATRIX_TOKEN_KEY,
   MATRIX_HOMESERVER_KEY,
-  MATRIX_DEFAULT_HOMESERVER,
+  MATRIX_FALLBACK_HOMESERVER as MATRIX_DEFAULT_HOMESERVER,
+  getEnvMatrixToken as getConfiguredMatrixToken,
+  getEnvMatrixHomeserver as getConfiguredMatrixHomeserver,
 };
 export type { TokenClearReason, TokenEvent, MatrixTokenEvent };

@@ -10,6 +10,7 @@ interface FileListProps {
   onOpenInBrowser: (item: DriveItem) => void;
   onCopyLink: (item: DriveItem) => void;
   onDetails: (item: DriveItem) => void;
+  onSendToElement?: (item: DriveItem) => void;
 }
 
 export function FileList({
@@ -21,6 +22,7 @@ export function FileList({
   onOpenInBrowser,
   onCopyLink,
   onDetails,
+  onSendToElement,
 }: FileListProps) {
   return (
     <div className="overflow-hidden rounded-lg border border-border-default bg-app-content">
@@ -45,6 +47,7 @@ export function FileList({
             onOpenInBrowser={onOpenInBrowser}
             onCopyLink={onCopyLink}
             onDetails={onDetails}
+            onSendToElement={onSendToElement}
           />
         ))}
       </div>

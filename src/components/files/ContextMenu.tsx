@@ -9,6 +9,7 @@ interface ItemMenuActions {
   onDownload: (item: DriveItem) => void;
   onCopyLink: (item: DriveItem) => void;
   onDetails: (item: DriveItem) => void;
+  onSendToElement?: (item: DriveItem) => void;
 }
 
 interface ContextMenuWrapperProps extends PropsWithChildren {
@@ -47,6 +48,16 @@ function MenuContent({ item, actions }: { item: DriveItem; actions: ItemMenuActi
       >
         Copy link
       </ContextMenu.Item>
+      {!isFolder && actions.onSendToElement ? (
+        <ContextMenu.Item
+          className="menu-item"
+          onSelect={() => {
+            actions.onSendToElement?.(item);
+          }}
+        >
+          Send to Element room
+        </ContextMenu.Item>
+      ) : null}
       {!isFolder ? (
         <ContextMenu.Item
           className="menu-item"
@@ -92,6 +103,16 @@ function DropdownContent({ item, actions }: { item: DriveItem; actions: ItemMenu
       >
         Copy link
       </DropdownMenu.Item>
+      {!isFolder && actions.onSendToElement ? (
+        <DropdownMenu.Item
+          className="menu-item"
+          onSelect={() => {
+            actions.onSendToElement?.(item);
+          }}
+        >
+          Send to Element room
+        </DropdownMenu.Item>
+      ) : null}
       {!isFolder ? (
         <DropdownMenu.Item
           className="menu-item"

@@ -87,3 +87,4 @@ See `.env.example`:
 - No backend and no Azure app registration required.
 - Sync behavior is session-based and client-side only; no always-on background worker.
 - Files browsing continues to work without Matrix token.
+- In local development (`npm run dev`), Graph requests are routed through a Vite proxy (`/graph-proxy`) to avoid browser CORS/preflight issues.

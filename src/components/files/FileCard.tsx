@@ -13,6 +13,7 @@ interface FileCardProps {
   onOpenInBrowser: (item: DriveItem) => void;
   onCopyLink: (item: DriveItem) => void;
   onDetails: (item: DriveItem) => void;
+  onSendToElement?: (item: DriveItem) => void;
 }
 
 export function FileCard({
@@ -24,6 +25,7 @@ export function FileCard({
   onOpenInBrowser,
   onCopyLink,
   onDetails,
+  onSendToElement,
 }: FileCardProps) {
   const actions = {
     onOpen: (entry: DriveItem) => {
@@ -36,6 +38,7 @@ export function FileCard({
     onDownload,
     onCopyLink,
     onDetails,
+    onSendToElement,
   };
 
   function handleDoubleClick(): void {

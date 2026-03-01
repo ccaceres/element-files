@@ -162,24 +162,97 @@ export interface MatrixJoinedRoomsResponse {
 }
 
 export interface ChannelMapping {
+  id: string;
   teamId: string;
   teamName: string;
   channelId: string;
   channelName: string;
+  channelLabel?: string;
+  source: ChannelSource;
+  driveId?: string | null;
+  rootFolderId?: string | null;
   matrixRoomId: string;
   lastSyncedMessageId: string | null;
   lastSyncedAt: string | null;
   enabled: boolean;
 }
 
+export interface CloneRoot {
+  teamId: string;
+  channelId: string;
+  channelLabel: string;
+  source: ChannelSource;
+  driveId: string;
+  rootFolderId: string;
+}
+
+export type MappingHealth = "ok" | "error" | "orphaned";
+
+export interface TeamSpaceMapping {
+  teamId: string;
+  teamName: string;
+  matrixSpaceId: string;
+  canonical: true;
+  createdAt: string;
+}
+
+export interface FileCloneMapping {
+  id: string;
+  teamId: string;
+  teamName: string;
+  channelId: string;
+  channelLabel: string;
+  channelNameNormalized?: string;
+  source: ChannelSource;
+  driveId: string;
+  rootFolderId: string;
+  matrixSpaceId: string;
+  matrixRoomId: string;
+  canonical: true;
+  health?: MappingHealth;
+  enabled: boolean;
+  lastClonedAt: string | null;
+}
+
+export type FileCloneStatus = "idle" | "cloning" | "running" | "paused" | "error";
+
+export interface FileCloneItemState {
+  driveItemId: string;
+  path: string;
+  lastModifiedDateTime: string;
+  size: number;
+  lastSentEventId?: string | null;
+  lastCloneStatus?: "failed";
+  lastError?: string | null;
+  lastAttemptedAt?: string | null;
+  retryAfter?: string | null;
+}
+
+export interface FileCloneRunStats {
+  scanned: number;
+  uploaded: number;
+  updated: number;
+  deleted: number;
+  skipped: number;
+  errors: number;
+}
+
 export type SyncTab = "files" | "sync";
 
 export interface SyncLogEntry {
   timestamp: string;
+  kind: "messages" | "files";
   channelName: string;
   messageCount: number;
   status: "success" | "error";
+  action?: "initial" | "delta" | "upload" | "update" | "delete" | "notice";
+  path?: string;
   error?: string;
+}
+
+export interface FileCloneLogEntry extends SyncLogEntry {
+  kind: "files";
+  mappingId: string;
 }
 
 export type SyncStatus = "idle" | "running" | "paused" | "error";

@@ -13,6 +13,7 @@ interface FileRowProps {
   onOpenInBrowser: (item: DriveItem) => void;
   onCopyLink: (item: DriveItem) => void;
   onDetails: (item: DriveItem) => void;
+  onSendToElement?: (item: DriveItem) => void;
 }
 
 export function FileRow({
@@ -24,6 +25,7 @@ export function FileRow({
   onOpenInBrowser,
   onCopyLink,
   onDetails,
+  onSendToElement,
 }: FileRowProps) {
   const isFolder = Boolean(item.folder);
 
@@ -38,6 +40,7 @@ export function FileRow({
     onDownload,
     onCopyLink,
     onDetails,
+    onSendToElement,
   };
 
   function handleDoubleClick(): void {

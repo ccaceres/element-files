@@ -1,24 +1,36 @@
 import { GraphApiError, graphFetch, graphFetchBlob, GRAPH_BASE } from "@/api/graph-client";
-import type { Channel, GraphCollectionResponse, GraphUser, Team } from "@/api/types";
+import type { Channel, CloneRoot, FilesFolder, GraphCollectionResponse, GraphUser, Team } from "@/api/types";
 
 export async function validateToken(
   token: string,
-): Promise<{ valid: boolean; user?: GraphUser }> {
+): Promise<{ valid: boolean; user?: GraphUser; status?: number; message?: string }> {
   try {
     const res = await fetch(`${GRAPH_BASE}/me`, {
       headers: {
         Authorization: `Bearer ${token}`,
+        Accept: "application/json",
       },
     });
 
     if (!res.ok) {
-      return { valid: false };
+      const bodyText = await res.text().catch(() => "");
+      let message = bodyText || `Graph API returned ${res.status}`;
+
+      try {
+        const parsed = JSON.parse(bodyText) as { error?: { message?: string } };
+        message = parsed.error?.message || message;
+      } catch {
+        // Keep raw body text when not JSON.
+      }
+
+      return { valid: false, status: res.status, message };
     }
 
     const user = (await res.json()) as GraphUser;
     return { valid: true, user };
-  } catch {
-    return { valid: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Network error";
+    return { valid: false, message };
   }
 }
 
@@ -53,6 +65,13 @@ export async function getTeamChannels(teamId: string): Promise<Channel[]> {
 
     throw error;
   }
+}
+
+async function getTeamsChannelFilesFolder(
+  teamId: string,
+  channelId: string,
+): Promise<FilesFolder> {
+  return graphFetch<FilesFolder>(`/teams/${teamId}/channels/${channelId}/filesFolder`);
 }
 
 interface GroupDrive {
@@ -104,6 +123,70 @@ async function getTeamChannelsFromDriveFolders(teamId: string): Promise<Channel[
       driveId: drive.id,
     })),
   );
+}
+
+export async function resolveCloneRoots(teamId: string): Promise<CloneRoot[]> {
+  const channels = await getTeamChannels(teamId);
+  const roots: CloneRoot[] = [];
+
+  for (const channel of channels) {
+    if (channel.source === "drive-folder" && channel.driveId && channel.folderId) {
+      roots.push({
+        teamId,
+        channelId: channel.id,
+        channelLabel: channel.displayName,
+        source: "drive-folder",
+        driveId: channel.driveId,
+        rootFolderId: channel.folderId,
+      });
+      continue;
+    }
+
+    if (channel.source === "teams-channel") {
+      try {
+        const filesFolder = await getTeamsChannelFilesFolder(teamId, channel.id);
+        roots.push({
+          teamId,
+          channelId: channel.id,
+          channelLabel: channel.displayName,
+          source: "teams-channel",
+          driveId: filesFolder.parentReference.driveId,
+          rootFolderId: filesFolder.id,
+        });
+      } catch {
+        // Skip channels whose files folder is not accessible.
+      }
+    }
+  }
+
+  const deduped = new Map<string, CloneRoot>();
+  for (const root of roots) {
+    const key = `${root.teamId}:${root.channelId}:${root.source}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, root);
+    }
+  }
+
+  return [...deduped.values()].sort((a, b) => {
+    const aGeneral = a.channelLabel.toLowerCase() === "general";
+    const bGeneral = b.channelLabel.toLowerCase() === "general";
+    if (aGeneral && !bGeneral) {
+      return -1;
+    }
+    if (!aGeneral && bGeneral) {
+      return 1;
+    }
+
+    const byLabel = a.channelLabel.localeCompare(b.channelLabel);
+    if (byLabel !== 0) {
+      return byLabel;
+    }
+
+    if (a.source === b.source) {
+      return 0;
+    }
+    return a.source === "teams-channel" ? -1 : 1;
+  });
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

@@ -1,6 +1,9 @@
 import { tokenManager } from "@/auth/token-manager";
+import { parseRetryAfterMs } from "@/utils/retry";
 
-const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+const GRAPH_BASE = import.meta.env.DEV
+  ? "/graph-proxy/v1.0"
+  : "https://graph.microsoft.com/v1.0";
 
 export class TokenExpiredError extends Error {
   constructor() {
@@ -11,18 +14,23 @@ export class TokenExpiredError extends Error {
 
 export class GraphApiError extends Error {
   status: number;
+  retryAfterMs?: number;
 
-  constructor(status: number, statusText: string, message: string) {
+  constructor(status: number, statusText: string, message: string, retryAfterMs?: number) {
     super(message || `Graph API error: ${status} ${statusText}`);
     this.name = "GraphApiError";
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
 function buildUrl(path: string, params?: Record<string, string>): URL {
   const url = path.startsWith("http")
     ? new URL(path)
-    : new URL(`${GRAPH_BASE}${path}`);
+    : new URL(
+        `${GRAPH_BASE}${path}`,
+        typeof window !== "undefined" ? window.location.origin : "http://localhost",
+      );
 
   if (params) {
     for (const [key, value] of Object.entries(params)) {
@@ -36,6 +44,7 @@ function buildUrl(path: string, params?: Record<string, string>): URL {
 async function throwGraphError(res: Response): Promise<never> {
   const bodyText = await res.text();
   let message = bodyText;
+  const retryAfterMs = parseRetryAfterMs(res.headers.get("Retry-After"));
 
   if (!bodyText) {
     message = `Graph API error: ${res.status} ${res.statusText}`;
@@ -50,7 +59,7 @@ async function throwGraphError(res: Response): Promise<never> {
     }
   }
 
-  throw new GraphApiError(res.status, res.statusText, message);
+  throw new GraphApiError(res.status, res.statusText, message, retryAfterMs ?? undefined);
 }
 
 function getAuthHeaders(initHeaders?: HeadersInit): Headers {

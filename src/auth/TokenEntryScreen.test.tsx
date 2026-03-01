@@ -5,6 +5,7 @@ import { TokenEntryScreen } from "@/auth/TokenEntryScreen";
 const setTokenMock = vi.fn();
 const setMatrixTokenMock = vi.fn();
 const clearExpiredStateMock = vi.fn();
+const validateTokenMock = vi.fn();
 
 vi.mock("@/auth/TokenContext", () => ({
   useTokenContext: () => ({
@@ -16,12 +17,18 @@ vi.mock("@/auth/TokenContext", () => ({
   }),
 }));
 
+vi.mock("@/api/teams", () => ({
+  validateToken: (...args: unknown[]) => validateTokenMock(...args),
+}));
+
 describe("TokenEntryScreen", () => {
   beforeEach(() => {
     setTokenMock.mockReset();
     setMatrixTokenMock.mockReset();
     clearExpiredStateMock.mockReset();
+    validateTokenMock.mockReset();
     setMatrixTokenMock.mockResolvedValue(true);
+    validateTokenMock.mockResolvedValue({ valid: false, status: 401, message: "Unauthorized" });
   });
 
   it("submits token and calls onSuccess when valid", async () => {
@@ -55,7 +62,7 @@ describe("TokenEntryScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(
-      await screen.findByText(/Microsoft token validation failed/i),
+      await screen.findByText(/Graph \/me returned 401 Unauthorized/i),
     ).toBeInTheDocument();
     expect(setTokenMock).toHaveBeenCalledWith("invalid");
   });

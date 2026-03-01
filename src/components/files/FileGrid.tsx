@@ -10,6 +10,7 @@ interface FileGridProps {
   onOpenInBrowser: (item: DriveItem) => void;
   onCopyLink: (item: DriveItem) => void;
   onDetails: (item: DriveItem) => void;
+  onSendToElement?: (item: DriveItem) => void;
 }
 
 export function FileGrid({
@@ -21,6 +22,7 @@ export function FileGrid({
   onOpenInBrowser,
   onCopyLink,
   onDetails,
+  onSendToElement,
 }: FileGridProps) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
@@ -35,6 +37,7 @@ export function FileGrid({
           onOpenInBrowser={onOpenInBrowser}
           onCopyLink={onCopyLink}
           onDetails={onDetails}
+          onSendToElement={onSendToElement}
         />
       ))}
     </div>

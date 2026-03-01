@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { graphFetch, TokenExpiredError } from "@/api/graph-client";
+import { graphFetch, GraphApiError, TokenExpiredError } from "@/api/graph-client";
 import { tokenManager } from "@/auth/token-manager";
 
 describe("graphFetch", () => {
@@ -35,6 +35,24 @@ describe("graphFetch", () => {
 
     await expect(graphFetch("/me")).rejects.toBeInstanceOf(TokenExpiredError);
     expect(tokenManager.getToken()).toBeNull();
+  });
+
+  it("exposes retryAfterMs for 429 responses", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "Too Many Requests" } }), {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": "5",
+        },
+      }),
+    );
+
+    await expect(graphFetch("/me")).rejects.toMatchObject<Partial<GraphApiError>>({
+      status: 429,
+      retryAfterMs: 5000,
+    });
   });
 });
 

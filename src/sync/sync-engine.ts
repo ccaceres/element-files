@@ -70,18 +70,19 @@ class SyncEngine {
             await this.postToMatrix(mapping, messages);
 
             const newest = messages[messages.length - 1];
-            useSyncStore.getState().updateMapping(mapping.channelId, {
+            useSyncStore.getState().updateMapping(mapping.id, {
               lastSyncedMessageId: newest?.id ?? null,
               lastSyncedAt: newest?.createdDateTime ?? null,
             });
           }
 
-          useSyncStore.getState().setSyncError(mapping.channelId, null);
+          useSyncStore.getState().setSyncError(mapping.id, null);
           useSyncStore.getState().addLogEntry({
             timestamp: new Date().toISOString(),
             channelName: `${mapping.teamName} > ${mapping.channelName}`,
             messageCount: messages.length,
             status: "success",
+            kind: "messages",
           });
         } catch (error) {
           if (this.isFatalAuthError(error)) {
@@ -90,12 +91,13 @@ class SyncEngine {
           }
 
           const message = error instanceof Error ? error.message : "Unknown sync error";
-          useSyncStore.getState().setSyncError(mapping.channelId, message);
+          useSyncStore.getState().setSyncError(mapping.id, message);
           useSyncStore.getState().addLogEntry({
             timestamp: new Date().toISOString(),
             channelName: `${mapping.teamName} > ${mapping.channelName}`,
             messageCount: 0,
             status: "error",
+            kind: "messages",
             error: message,
           });
         }
@@ -142,7 +144,7 @@ class SyncEngine {
       );
     }
 
-    messages = messages.filter((message) => !this.isAlreadySynced(mapping.channelId, message.id));
+    messages = messages.filter((message) => !this.isAlreadySynced(mapping.id, message.id));
 
     messages.sort((a, b) =>
       new Date(a.createdDateTime).getTime() - new Date(b.createdDateTime).getTime(),
@@ -160,7 +162,7 @@ class SyncEngine {
       const htmlBody = this.formatMessageHtml(sender, message);
 
       await this.sendMessageWithBackoff(mapping.matrixRoomId, plainBody, htmlBody);
-      this.markSynced(mapping.channelId, message.id);
+      this.markSynced(mapping.id, message.id);
 
       await wait(200);
     }

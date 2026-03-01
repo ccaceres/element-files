@@ -80,7 +80,7 @@ export function ChannelMappingDialog({
     }
 
     if (!channelsQuery.isLoading && selectedTeamId && selectableChannels.length === 0) {
-      return "Sync requires channel API access. This team currently exposes folder-only channels for Files browsing.";
+      return "Message sync unavailable for this team (channel API blocked). File clone is available via SharePoint folder mode.";
     }
 
     return null;
@@ -124,10 +124,15 @@ export function ChannelMappingDialog({
       }
 
       const mapping: ChannelMapping = {
+        id: `${selectedTeam.id}:${selectedChannel.id}`,
         teamId: selectedTeam.id,
         teamName: selectedTeam.displayName,
         channelId: selectedChannel.id,
         channelName: selectedChannel.displayName,
+        channelLabel: selectedChannel.displayName,
+        source: "teams-channel",
+        driveId: null,
+        rootFolderId: null,
         matrixRoomId: roomId,
         lastSyncedMessageId: null,
         lastSyncedAt: null,

@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixTokenManager, tokenManager } from "@/auth/token-manager";
 
+function getConfiguredElementToken(): string | null {
+  const fromDefine = typeof __ELEMENT_TOKEN__ !== "undefined" ? __ELEMENT_TOKEN__.trim() : "";
+  return fromDefine || null;
+}
+
+function getConfiguredHomeserver(): string | null {
+  const fromDefine =
+    typeof __MATRIX_SERVER_URL__ !== "undefined" ? __MATRIX_SERVER_URL__.trim() : "";
+  return fromDefine || null;
+}
+
 describe("tokenManager", () => {
   beforeEach(() => {
     window.sessionStorage.clear();
@@ -36,29 +47,36 @@ describe("matrixTokenManager", () => {
   });
 
   it("stores and clears matrix token", () => {
+    const configured = getConfiguredElementToken();
+
     matrixTokenManager.setToken("matrix-abc");
-    expect(matrixTokenManager.getToken()).toBe("matrix-abc");
+    expect(matrixTokenManager.getToken()).toBe(configured ?? "matrix-abc");
 
     matrixTokenManager.clearToken();
-    expect(matrixTokenManager.getToken()).toBeNull();
+    expect(matrixTokenManager.getToken()).toBe(configured);
   });
 
   it("uses default homeserver and supports override", () => {
-    expect(matrixTokenManager.getHomeserver()).toBe("https://matrix.bsdu.eu");
+    const configured = getConfiguredHomeserver();
+    expect(matrixTokenManager.getHomeserver()).toBe(configured ?? "https://matrix.bsdu.eu");
 
     matrixTokenManager.setHomeserver("https://matrix.example.org");
-    expect(matrixTokenManager.getHomeserver()).toBe("https://matrix.example.org");
+    expect(matrixTokenManager.getHomeserver()).toBe(configured ?? "https://matrix.example.org");
   });
 
   it("emits set and clear events", () => {
+    const configured = getConfiguredElementToken();
     const listener = vi.fn();
     const unsubscribe = matrixTokenManager.subscribe(listener);
 
     matrixTokenManager.setToken("matrix-abc");
     matrixTokenManager.clearToken();
 
-    expect(listener).toHaveBeenNthCalledWith(1, { type: "set", token: "matrix-abc" });
-    expect(listener).toHaveBeenNthCalledWith(2, { type: "clear" });
+    expect(listener).toHaveBeenNthCalledWith(1, { type: "set", token: configured ?? "matrix-abc" });
+    expect(listener).toHaveBeenNthCalledWith(
+      2,
+      configured ? { type: "set", token: configured } : { type: "clear" },
+    );
 
     unsubscribe();
   });

@@ -74,9 +74,10 @@ export function TokenProvider({ children }: PropsWithChildren) {
 
   const clearMatrixToken = useCallback(() => {
     matrixTokenManager.clearToken();
-    setMatrixTokenValue(null);
+    const activeMatrixToken = matrixTokenManager.getToken();
+    setMatrixTokenValue(activeMatrixToken);
     setMatrixUserId(null);
-    setMatrixStatus("none");
+    setMatrixStatus(getMatrixStatus(activeMatrixToken));
   }, []);
 
   const setMatrixToken = useCallback(
@@ -88,16 +89,18 @@ export function TokenProvider({ children }: PropsWithChildren) {
 
       const normalizedHomeserver = (homeserver ?? matrixHomeserver).trim() || matrixHomeserver;
       const validation = await validateMatrixToken(normalizedHomeserver, normalizedToken);
-      if (!validation.valid || !validation.userId) {
+      if (!validation.valid && !validation.transient) {
         return false;
       }
 
       matrixTokenManager.setHomeserver(normalizedHomeserver);
       matrixTokenManager.setToken(normalizedToken);
 
-      setMatrixHomeserver(normalizedHomeserver);
-      setMatrixTokenValue(normalizedToken);
-      setMatrixUserId(validation.userId);
+      const effectiveHomeserver = matrixTokenManager.getHomeserver();
+      const effectiveToken = matrixTokenManager.getToken();
+      setMatrixHomeserver(effectiveHomeserver);
+      setMatrixTokenValue(effectiveToken);
+      setMatrixUserId(validation.valid ? validation.userId ?? null : null);
       setMatrixStatus("valid");
       return true;
     },
@@ -208,6 +211,11 @@ export function TokenProvider({ children }: PropsWithChildren) {
         if (matrixResult.valid && matrixResult.userId) {
           setMatrixTokenValue(activeMatrixToken);
           setMatrixUserId(matrixResult.userId);
+          setMatrixStatus("valid");
+        } else if (matrixResult.transient) {
+          // Keep token on transient failures; operations can still revalidate lazily.
+          setMatrixTokenValue(activeMatrixToken);
+          setMatrixUserId(null);
           setMatrixStatus("valid");
         } else {
           clearMatrixToken();

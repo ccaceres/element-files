@@ -9,6 +9,10 @@ import type {
 const FOLDER_SELECT =
   "id,name,size,lastModifiedDateTime,lastModifiedBy,file,folder,webUrl,parentReference";
 
+interface GraphPagedCollectionResponse<T> extends GraphCollectionResponse<T> {
+  "@odata.nextLink"?: string;
+}
+
 export async function getChannelFilesFolder(
   teamId: string,
   channelId: string,
@@ -30,6 +34,32 @@ export async function getFolderChildren(
   );
 
   return response.value;
+}
+
+async function getFolderChildrenPaged(
+  driveId: string,
+  itemId: string,
+): Promise<DriveItem[]> {
+  const allItems: DriveItem[] = [];
+  let nextPath: string | null = `/drives/${driveId}/items/${itemId}/children`;
+  let params: Record<string, string> | undefined = {
+    "$select": FOLDER_SELECT,
+    "$orderby": "name",
+    "$top": "200",
+  };
+
+  while (nextPath) {
+    const response: GraphPagedCollectionResponse<DriveItem> = await graphFetch(
+      nextPath,
+      params,
+    );
+
+    allItems.push(...response.value);
+    nextPath = response["@odata.nextLink"] ?? null;
+    params = undefined;
+  }
+
+  return allItems;
 }
 
 function escapeSearchQuery(query: string): string {
@@ -90,5 +120,90 @@ export async function getThumbnailUrl(
   } catch {
     return null;
   }
+}
+
+interface DownloadLinkResponse {
+  "@microsoft.graph.downloadUrl"?: string;
+}
+
+export async function getFileContentBlob(
+  driveId: string,
+  itemId: string,
+): Promise<Blob> {
+  try {
+    const response = await graphFetch<DownloadLinkResponse>(
+      `/drives/${driveId}/items/${itemId}`,
+      {
+        "$select": "id,name,@microsoft.graph.downloadUrl",
+      },
+    );
+
+    const downloadUrl = response["@microsoft.graph.downloadUrl"];
+    if (downloadUrl) {
+      const fileResponse = await fetch(downloadUrl);
+      if (fileResponse.ok) {
+        return fileResponse.blob();
+      }
+    }
+  } catch {
+    // Fallback to Graph content endpoint below.
+  }
+
+  return graphFetchBlob(`/drives/${driveId}/items/${itemId}/content`);
+}
+
+export interface DriveTreeFile {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  lastModifiedDateTime: string;
+  mimeType: string;
+  webUrl: string;
+}
+
+export async function listFolderTree(
+  driveId: string,
+  rootFolderId: string,
+): Promise<DriveTreeFile[]> {
+  const files: DriveTreeFile[] = [];
+  const queue: Array<{ folderId: string; basePath: string }> = [
+    { folderId: rootFolderId, basePath: "" },
+  ];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+
+    const children = await getFolderChildrenPaged(driveId, current.folderId);
+    children.sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const child of children) {
+      const nextPath = `${current.basePath}/${child.name}`;
+      if (child.folder) {
+        queue.push({ folderId: child.id, basePath: nextPath });
+        continue;
+      }
+
+      if (!child.file) {
+        continue;
+      }
+
+      files.push({
+        id: child.id,
+        name: child.name,
+        path: nextPath,
+        size: child.size ?? 0,
+        lastModifiedDateTime: child.lastModifiedDateTime,
+        mimeType: child.file.mimeType ?? "application/octet-stream",
+        webUrl: child.webUrl,
+      });
+    }
+  }
+
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  return files;
 }
 

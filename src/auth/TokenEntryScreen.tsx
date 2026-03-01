@@ -1,5 +1,11 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { validateToken } from "@/api/teams";
 import { useTokenContext } from "@/auth/TokenContext";
+import { normalizeAccessToken } from "@/auth/token-format";
+import {
+  getConfiguredMatrixHomeserver,
+  getConfiguredMatrixToken,
+} from "@/auth/token-manager";
 import { KeyRegular } from "@fluentui/react-icons";
 import clsx from "clsx";
 
@@ -18,10 +24,13 @@ export function TokenEntryScreen({
 }: TokenEntryScreenProps) {
   const { setToken, setMatrixToken, status, clearExpiredState, matrixHomeserver } =
     useTokenContext();
+  const envMatrixToken = getConfiguredMatrixToken();
+  const envMatrixHomeserver = getConfiguredMatrixHomeserver();
+  const matrixTokenFromEnv = Boolean(envMatrixToken);
 
   const [graphToken, setGraphToken] = useState("");
   const [matrixToken, setMatrixTokenValue] = useState("");
-  const [homeserver, setHomeserver] = useState(matrixHomeserver);
+  const [homeserver, setHomeserver] = useState(envMatrixHomeserver || matrixHomeserver);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,17 +53,45 @@ export function TokenEntryScreen({
     try {
       const graphOk = await setToken(graphToken);
       if (!graphOk) {
+        const normalizedGraphToken = normalizeAccessToken(graphToken);
+        const validation = await validateToken(normalizedGraphToken);
+
+        if (validation.status === 401) {
+          setError(
+            `Graph /me returned 401 Unauthorized. The token may be expired, revoked, or for a different audience. ${validation.message ?? ""}`.trim(),
+          );
+          return;
+        }
+
+        if (validation.status === 403) {
+          setError(
+            `Graph /me returned 403 Forbidden. This token is not allowed to read profile data in this tenant (User.Read delegated scope and tenant policy must allow it). ${validation.message ?? ""}`.trim(),
+          );
+          return;
+        }
+
+        if (validation.status) {
+          setError(
+            `Graph /me returned ${validation.status}. ${validation.message ?? "Token validation failed."}`.trim(),
+          );
+          return;
+        }
+
         setError(
-          'Microsoft token validation failed. Paste only the raw access token (without "Bearer "), verify User.Read is consented in Graph Explorer, and try again.',
+          `Could not validate Microsoft token against Graph /me. ${validation.message ?? "Check network, browser privacy settings, and try again."}`.trim(),
         );
         return;
       }
 
-      const matrixTokenTrimmed = matrixToken.trim();
+      const matrixTokenTrimmed = matrixTokenFromEnv ? envMatrixToken ?? "" : matrixToken.trim();
       if (matrixTokenTrimmed) {
         const matrixOk = await setMatrixToken(matrixTokenTrimmed, homeserver.trim());
         if (!matrixOk) {
-          setError("Graph token is valid, but Matrix token is invalid. Check token and homeserver.");
+          setError(
+            matrixTokenFromEnv
+              ? "Graph token is valid, but environment Matrix token validation failed."
+              : "Graph token is valid, but Matrix token is invalid. Check token and homeserver.",
+          );
           return;
         }
       } else {
@@ -125,14 +162,20 @@ export function TokenEntryScreen({
             <label className="block text-sm font-medium text-text-primary" htmlFor="matrix-token-input">
               Element Token (required for Sync)
             </label>
-            <textarea
-              id="matrix-token-input"
-              className="h-24 w-full rounded border border-border-default bg-app-content p-3 font-mono text-xs text-text-primary outline-none transition focus:border-accent-primary"
-              placeholder="Paste Matrix access token..."
-              value={matrixToken}
-              onChange={(event) => setMatrixTokenValue(event.target.value)}
-              disabled={submitting}
-            />
+            {matrixTokenFromEnv ? (
+              <div className="rounded border border-border-default bg-app-content p-3 text-xs text-text-secondary">
+                Matrix token is loaded from <code className="font-mono">ELEMENT_TOKEN</code> environment variable.
+              </div>
+            ) : (
+              <textarea
+                id="matrix-token-input"
+                className="h-24 w-full rounded border border-border-default bg-app-content p-3 font-mono text-xs text-text-primary outline-none transition focus:border-accent-primary"
+                placeholder="Paste Matrix access token..."
+                value={matrixToken}
+                onChange={(event) => setMatrixTokenValue(event.target.value)}
+                disabled={submitting}
+              />
+            )}
 
             <label className="block text-xs font-medium text-text-secondary" htmlFor="matrix-homeserver-input">
               Matrix Homeserver
@@ -143,7 +186,7 @@ export function TokenEntryScreen({
               value={homeserver}
               onChange={(event) => setHomeserver(event.target.value)}
               placeholder="https://matrix.bsdu.eu"
-              disabled={submitting}
+              disabled={submitting || matrixTokenFromEnv}
             />
             <p className="text-xs text-text-secondary">
               Get token from Element: Settings - Help & About - Access Token.

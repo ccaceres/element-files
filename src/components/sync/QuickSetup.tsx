@@ -1,34 +1,50 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { resolveCloneRoots } from "@/api/teams";
 import { useTokenContext } from "@/auth/TokenContext";
-import { useChannels } from "@/hooks/useChannels";
+import { matrixTokenManager } from "@/auth/token-manager";
+import { useNavigation } from "@/hooks/useNavigation";
 import { useTeams } from "@/hooks/useTeams";
-import { setupTeamRooms } from "@/sync/room-setup";
-import type { ChannelMapping } from "@/types";
+import { useSyncStore } from "@/stores/sync-store";
+import { setupFileCloneRooms } from "@/sync/room-setup";
+import type { FileCloneMapping, TeamSpaceMapping } from "@/types";
 
 interface QuickSetupProps {
   autoPinWidget: boolean;
   onAutoPinWidgetChange: (pin: boolean) => void;
-  onMappingsCreated: (mappings: ChannelMapping[]) => void;
-  onStartSync: () => void;
+  onTeamSpaceResolved: (mapping: TeamSpaceMapping) => void;
+  onMappingsCreated: (mappings: FileCloneMapping[]) => void;
+  onRunInitialClone: (mappings: FileCloneMapping[]) => Promise<void>;
+  onStartCloneSync: () => void;
 }
 
 export function QuickSetup({
   autoPinWidget,
   onAutoPinWidgetChange,
+  onTeamSpaceResolved,
   onMappingsCreated,
-  onStartSync,
+  onRunInitialClone,
+  onStartCloneSync,
 }: QuickSetupProps) {
   const teamsQuery = useTeams();
-  const [selectedTeamId, setSelectedTeamId] = useState("");
-  const channelsQuery = useChannels(selectedTeamId || null);
-  const { matrixUserId } = useTokenContext();
+  const { selectedTeam: sidebarTeam } = useNavigation();
+  const { matrixToken, matrixUserId } = useTokenContext();
+  const latestMappings = useSyncStore((state) => state.fileCloneMappings);
+  const teamSpaceMappings = useSyncStore((state) => state.teamSpaceMappings);
 
-  const [backfillCount, setBackfillCount] = useState(50);
+  const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (teamsQuery.data && teamsQuery.data.length > 0 && !selectedTeamId) {
+    if (sidebarTeam?.id) {
+      setSelectedTeamId(sidebarTeam.id);
+    }
+  }, [sidebarTeam?.id]);
+
+  useEffect(() => {
+    if (!selectedTeamId && teamsQuery.data && teamsQuery.data.length > 0) {
       setSelectedTeamId(teamsQuery.data[0]?.id ?? "");
     }
   }, [selectedTeamId, teamsQuery.data]);
@@ -38,45 +54,96 @@ export function QuickSetup({
     [selectedTeamId, teamsQuery.data],
   );
 
-  const channels = useMemo(
-    () => (channelsQuery.data ?? []).filter((channel) => channel.source === "teams-channel"),
-    [channelsQuery.data],
-  );
+  const cloneRootsQuery = useQuery({
+    queryKey: ["clone-roots", selectedTeamId],
+    queryFn: () => resolveCloneRoots(selectedTeamId),
+    enabled: Boolean(selectedTeamId),
+    staleTime: 60 * 1000,
+  });
 
-  async function handleSetup(startSyncAfter: boolean): Promise<void> {
+  const cloneRoots = cloneRootsQuery.data ?? [];
+  const teamsChannelCount = cloneRoots.filter((root) => root.source === "teams-channel").length;
+  const driveFolderCount = cloneRoots.filter((root) => root.source === "drive-folder").length;
+  const effectiveMatrixToken = matrixToken ?? matrixTokenManager.getToken();
+  const hasMatrixToken = Boolean(effectiveMatrixToken);
+
+  const capabilityNote = useMemo(() => {
     if (!selectedTeam) {
-      setError("Select a team for quick setup.");
-      return;
+      return null;
     }
 
-    if (!matrixUserId) {
-      setError("Matrix token is required before quick setup.");
-      return;
+    if (cloneRoots.length === 0 && !cloneRootsQuery.isLoading) {
+      return "No accessible file roots found for this team.";
     }
 
-    if (channels.length === 0) {
-      setError("No sync-compatible channels found for this team.");
-      return;
+    if (teamsChannelCount === 0 && driveFolderCount > 0) {
+      return "Message sync unavailable for this team (channel API blocked). File clone is available via SharePoint folder mode.";
     }
 
+    return null;
+  }, [cloneRoots.length, cloneRootsQuery.isLoading, driveFolderCount, selectedTeam, teamsChannelCount]);
+
+  async function prepareMappings(): Promise<{
+    teamSpaceMapping: TeamSpaceMapping;
+    mappings: FileCloneMapping[];
+  }> {
+    if (!selectedTeam) {
+      throw new Error("Select a team before starting file clone.");
+    }
+
+    if (!hasMatrixToken) {
+      throw new Error("Matrix token is required for file clone.");
+    }
+
+    if (cloneRoots.length === 0) {
+      throw new Error("No clone roots found for the selected team.");
+    }
+
+    const effectivePinWidget = autoPinWidget && Boolean(matrixUserId);
+
+    return setupFileCloneRooms(
+      selectedTeam.id,
+      selectedTeam.displayName,
+      cloneRoots,
+      latestMappings,
+      teamSpaceMappings,
+      {
+        pinWidget: effectivePinWidget,
+        widgetUrl: window.location.origin,
+        matrixUserId: matrixUserId ?? undefined,
+        widgetName: "ICC-LAB Files",
+      },
+    );
+  }
+
+  async function handleCloneNow(): Promise<void> {
     setRunning(true);
     setError(null);
 
     try {
-      const mappings = await setupTeamRooms(selectedTeam.id, selectedTeam.displayName, channels, {
-        pinWidget: autoPinWidget,
-        widgetUrl: window.location.origin,
-        matrixUserId,
-        backfillCount,
-      });
-
-      onMappingsCreated(mappings);
-
-      if (startSyncAfter) {
-        onStartSync();
-      }
+      const result = await prepareMappings();
+      onTeamSpaceResolved(result.teamSpaceMapping);
+      onMappingsCreated(result.mappings);
+      const enabledMappings = result.mappings.filter((mapping) => mapping.enabled);
+      await onRunInitialClone(enabledMappings);
+      onStartCloneSync();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Quick setup failed.");
+      setError(caught instanceof Error ? caught.message : "File clone setup failed.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handlePrepareOnly(): Promise<void> {
+    setRunning(true);
+    setError(null);
+
+    try {
+      const result = await prepareMappings();
+      onTeamSpaceResolved(result.teamSpaceMapping);
+      onMappingsCreated(result.mappings);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not prepare clone mappings.");
     } finally {
       setRunning(false);
     }
@@ -86,81 +153,106 @@ export function QuickSetup({
     <section className="rounded-lg border border-border-default bg-app-surface p-4">
       <h3 className="mb-3 text-sm font-semibold text-text-primary">Quick Setup</h3>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div>
-          <label className="mb-1 block text-xs text-text-secondary" htmlFor="quick-setup-team">
-            Team
-          </label>
-          <select
-            id="quick-setup-team"
-            className="w-full rounded border border-border-default bg-app-content px-2 py-2 text-sm text-text-primary outline-none"
-            value={selectedTeamId}
-            onChange={(event) => setSelectedTeamId(event.target.value)}
-          >
-            {(teamsQuery.data ?? []).map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="rounded border border-border-default bg-app-content p-3">
+        <p className="text-sm font-semibold text-text-primary">One-click file clone</p>
+        <p className="mt-1 text-xs text-text-secondary">
+          Selected team: <span className="text-text-primary">{selectedTeam?.displayName ?? "None selected"}</span>
+        </p>
+        <p className="mt-1 text-xs text-text-secondary">
+          Discoverable roots: {cloneRoots.length} ({teamsChannelCount} Teams channels, {driveFolderCount} folder fallback)
+        </p>
+        <p className="mt-1 text-xs text-text-tertiary">
+          Creates one Team Space with channel rooms, clones full folder structure, then starts delta sync.
+        </p>
 
-        <div>
-          <label className="mb-1 block text-xs text-text-secondary" htmlFor="quick-setup-backfill">
-            Backfill messages
-          </label>
-          <select
-            id="quick-setup-backfill"
-            className="w-full rounded border border-border-default bg-app-content px-2 py-2 text-sm text-text-primary outline-none"
-            value={backfillCount}
-            onChange={(event) => setBackfillCount(Number.parseInt(event.target.value, 10))}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="rounded bg-accent-primary px-3 py-1.5 text-sm text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-70"
+            disabled={running || !selectedTeam || !hasMatrixToken || cloneRootsQuery.isLoading}
+            onClick={() => {
+              void handleCloneNow();
+            }}
           >
-            <option value={0}>No history</option>
-            <option value={20}>Last 20 messages</option>
-            <option value={50}>Last 50 messages</option>
-            <option value={100}>Last 100 messages</option>
-          </select>
+            {running ? "Cloning..." : "Clone selected team files now"}
+          </button>
+
+          <button
+            type="button"
+            className="rounded border border-border-default px-3 py-1.5 text-sm text-text-secondary transition hover:bg-app-hover"
+            onClick={() => setShowAdvanced((state) => !state)}
+          >
+            {showAdvanced ? "Hide advanced options" : "Show advanced options"}
+          </button>
         </div>
       </div>
 
-      <label className="mt-3 flex items-center gap-2 text-sm text-text-primary">
-        <input
-          type="checkbox"
-          checked={autoPinWidget}
-          onChange={(event) => onAutoPinWidgetChange(event.target.checked)}
-        />
-        Pin file widget to each new room
-      </label>
+      {showAdvanced ? (
+        <div className="mt-3 rounded border border-border-default bg-app-content p-3">
+          <p className="mb-3 text-sm font-semibold text-text-primary">Advanced options</p>
 
-      <p className="mt-2 text-xs text-text-secondary">
-        Channels available for setup: {channels.length}
-      </p>
+          <div>
+            <label className="mb-1 block text-xs text-text-secondary" htmlFor="quick-setup-team">
+              Team
+            </label>
+            <select
+              id="quick-setup-team"
+              className="w-full rounded border border-border-default bg-app-surface px-2 py-2 text-sm text-text-primary outline-none"
+              value={selectedTeamId}
+              onChange={(event) => setSelectedTeamId(event.target.value)}
+            >
+              {(teamsQuery.data ?? []).map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
 
+          <label className="mt-3 flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={autoPinWidget}
+              onChange={(event) => onAutoPinWidgetChange(event.target.checked)}
+            />
+            Pin file widget to each new room
+          </label>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded border border-border-default px-3 py-1.5 text-sm text-text-secondary transition hover:bg-app-hover disabled:cursor-not-allowed disabled:opacity-70"
+              disabled={running}
+              onClick={() => {
+                void handlePrepareOnly();
+              }}
+            >
+              {running ? "Preparing..." : "Prepare mappings only"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {capabilityNote ? <p className="mt-2 text-xs text-token-warning">{capabilityNote}</p> : null}
+      {cloneRootsQuery.error ? (
+        <p className="mt-2 text-xs text-token-expired">
+          Could not discover clone roots for this team.
+        </p>
+      ) : null}
       {error ? <p className="mt-2 text-xs text-token-expired">{error}</p> : null}
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className="rounded border border-border-default px-3 py-1.5 text-sm text-text-secondary transition hover:bg-app-hover disabled:cursor-not-allowed disabled:opacity-70"
-          disabled={running}
-          onClick={() => {
-            void handleSetup(false);
-          }}
-        >
-          {running ? "Setting up..." : "Create rooms + mappings"}
-        </button>
-
-        <button
-          type="button"
-          className="rounded bg-accent-primary px-3 py-1.5 text-sm text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-70"
-          disabled={running}
-          onClick={() => {
-            void handleSetup(true);
-          }}
-        >
-          {running ? "Setting up..." : "Create + start sync"}
-        </button>
-      </div>
+      {autoPinWidget && hasMatrixToken && !matrixUserId ? (
+        <p className="mt-2 text-xs text-token-warning">
+          Matrix token is set but user identity could not be resolved yet. Clone will run, but widget auto-pin is skipped.
+        </p>
+      ) : null}
+      <p className="mt-2 text-xs text-text-tertiary">
+        Only mappings marked as Enabled are cloned. Paused mappings are skipped.
+      </p>
+      {sidebarTeam ? (
+        <p className="mt-2 text-xs text-text-tertiary">
+          Tip: choose a different team in the sidebar, then click clone.
+        </p>
+      ) : null}
     </section>
   );
 }
