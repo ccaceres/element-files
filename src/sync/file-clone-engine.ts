@@ -1,14 +1,16 @@
 import { getFileContentBlob, listFolderTree, type DriveTreeFile } from "@/api/files";
-import { TokenExpiredError } from "@/api/graph-client";
+import { GraphApiError, TokenExpiredError } from "@/api/graph-client";
 import { MatrixApiError } from "@/api/matrix-client";
 import { MatrixFileSendError, sendCloneNotice, sendFile } from "@/api/matrix-rooms";
 import { matrixTokenManager, tokenManager } from "@/auth/token-manager";
 import { useSyncStore } from "@/stores/sync-store";
+import { computeBackoffWithJitter, sleep } from "@/utils/retry";
 import type { FileCloneItemState, FileCloneMapping, FileCloneRunStats } from "@/types";
 
-const SEND_DELAY_MS = 200;
-const CLONE_CONCURRENCY = 2;
+const SEND_DELAY_MS = 500;
+const CLONE_CONCURRENCY = 1;
 const FAILED_RETRY_DELAY_MS = 60 * 1000;
+const MAX_RATE_LIMIT_DELAY_MS = 60_000;
 
 type TransferStage = "download" | "upload" | "send";
 
@@ -25,10 +27,14 @@ class CloneTransferError extends Error {
   }
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
+class MappingRateLimitedError extends Error {
+  retryAfterMs: number;
+
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.name = "MappingRateLimitedError";
+    this.retryAfterMs = retryAfterMs;
+  }
 }
 
 function toState(file: DriveTreeFile): FileCloneItemState {
