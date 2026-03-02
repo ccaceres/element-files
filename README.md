@@ -1,4 +1,4 @@
-# ICC-LAB Files + Sync Widget
+# LAB Files + Sync Widget
 
 React + TypeScript + Vite widget for:
 
